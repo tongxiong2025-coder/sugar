@@ -10,7 +10,7 @@ import {
 import { 
   Radar, ShieldCheck, Zap, 
   Lightbulb, History, Settings, 
-  ArrowLeft, Building2, Volume2, Pause, AlertCircle, Sparkles, Coffee, RefreshCw
+  ArrowLeft, Building2, Volume2, Pause, AlertCircle, Sparkles, Coffee, RefreshCw, Users, Star
 } from 'lucide-react';
 
 /**
@@ -27,10 +27,9 @@ const firebaseConfig = {
   appId: "1:388090302429:web:97657e8f4690a5b17e3034"
 };
 
-// 在预览执行环境中，必须将 API Key 设置为空字符串，环境会自动注入有效密钥
 const GEMINI_API_KEY = ""; 
 const APP_ID_DB = "sugar-radar-prod-fast"; 
-const AUTO_UPDATE_INTERVAL = 3600; // 自动更新间隔：1小时 (秒)
+const AUTO_UPDATE_INTERVAL = 3600; 
 
 const app = initializeApp(firebaseConfig);
 const auth = getAuth(app);
@@ -50,7 +49,6 @@ const App = () => {
   const [audioState, setAudioState] = useState({ playing: false, id: null });
   const audioRef = useRef(null);
 
-  // 格式化倒计时显示 (HH:MM:SS)
   const formatCountdown = (seconds) => {
     const h = Math.floor(seconds / 3600);
     const m = Math.floor((seconds % 3600) / 60);
@@ -60,14 +58,8 @@ const App = () => {
 
   useEffect(() => {
     const unsubscribe = onAuthStateChanged(auth, async (u) => {
-      if (u) { 
-        setUser(u); 
-      } else {
-        try { 
-          await signInAnonymously(auth); 
-        } catch (e) { 
-          setErrorMsg("Firebase 身份验证失败，请检查配置或网络。"); 
-        }
+      if (u) { setUser(u); } else {
+        try { await signInAnonymously(auth); } catch (e) { setErrorMsg("身份验证失败: " + e.message); }
       }
     });
     return () => unsubscribe();
@@ -79,34 +71,31 @@ const App = () => {
     const unsubIntel = onSnapshot(query(qIntel), (snap) => {
       const data = snap.docs.map(d => ({ id: d.id, ...d.data() }));
       setIntelList(data.sort((a, b) => (b.createdAt?.seconds || 0) - (a.createdAt?.seconds || 0)).slice(0, 50));
-    }, (err) => console.error("Firestore Intel Error:", err));
+    }, (err) => setErrorMsg("Firestore 连接异常: " + err.message));
 
     const qLogs = collection(db, 'artifacts', APP_ID_DB, 'public', 'data', 'logs');
     const unsubLogs = onSnapshot(query(qLogs), (snap) => {
       const data = snap.docs.map(d => ({ id: d.id, ...d.data() }));
       setLogs(data.sort((a, b) => (b.createdAt?.seconds || 0) - (a.createdAt?.seconds || 0)));
-    }, (err) => console.error("Firestore Logs Error:", err));
+    });
 
     const fetchConfig = async () => {
       try {
         const docRef = doc(db, 'artifacts', APP_ID_DB, 'public', 'data', 'config', 'main');
         const snap = await getDoc(docRef);
         if (snap.exists()) setStrategy(snap.data().strategy);
-      } catch (e) {
-        console.warn("Failed to fetch config:", e);
-      }
+      } catch (e) {}
     };
     fetchConfig();
     return () => { unsubIntel(); unsubLogs(); };
   }, [user]);
 
-  // 1小时自动更新计时器
   useEffect(() => {
     if (!user) return;
     const timer = setInterval(() => {
       setCountdown((prev) => {
         if (prev <= 1) {
-          if (!isUpdating) triggerUpdate(true); // 触发 5 条更新
+          if (!isUpdating) triggerUpdate(true); 
           return AUTO_UPDATE_INTERVAL; 
         }
         return prev - 1;
@@ -118,30 +107,18 @@ const App = () => {
   const geminiFetch = async (payload, endpoint = "generateContent", model = "gemini-2.5-flash-preview-09-2025") => {
     const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:${endpoint}?key=${GEMINI_API_KEY}`;
     
-    for (let i = 0; i < 5; i++) {
+    for (let i = 0; i < 3; i++) {
       try {
-        const res = await fetch(url, { 
-          method: 'POST', 
-          headers: { 'Content-Type': 'application/json' }, 
-          body: JSON.stringify(payload) 
-        });
+        const res = await fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
         const data = await res.json();
-        
         if (res.ok) return data;
 
-        if (res.status === 429 || data.error?.message?.includes("quota")) {
-          throw new Error("QUOTA_LIMIT");
-        }
-        
-        if (res.status === 403 || res.status === 401) {
-          throw new Error("AUTH_ERROR");
-        }
-
-        throw new Error(data.error?.message || `API Error ${res.status}`);
+        if (res.status === 429 || data.error?.message?.includes("quota")) throw new Error("QUOTA_LIMIT");
+        throw new Error(data.error?.message || `API错误: ${res.status}`);
       } catch (e) {
-        if (e.message === "QUOTA_LIMIT" || e.message === "AUTH_ERROR") throw e;
-        if (i === 4) throw e;
-        await new Promise(r => setTimeout(r, Math.pow(2, i) * 1000));
+        if (e.message === "QUOTA_LIMIT") throw e;
+        if (i === 2) throw e;
+        await new Promise(r => setTimeout(r, 2000));
       }
     }
   };
@@ -151,27 +128,22 @@ const App = () => {
     setIsUpdating(true);
     if (!isAuto) setErrorMsg(null);
 
-    // 根据是否自动触发决定抓取数量
-    const count = isAuto ? 5 : 2;
+    // 每小时自动更新 15 条，手动更新 2 条
+    const count = isAuto ? 15 : 2;
 
     try {
       const result = await geminiFetch({
-        contents: [{ parts: [{ text: `根据当前策略搜集 ${count} 条最新商业情报动态：${strategy}` }] }],
+        contents: [{ parts: [{ text: `搜集 ${count} 条关于：${strategy} 的最新商业动态。` }] }],
         systemInstruction: { 
-          parts: [{ text: `你是一个专业的商业情报专家。请抓取 ${count} 条最新动态并严格返回 JSON 格式：{ 'items': [ { 'title': '标题', 'content': '内容', 'impact': '影响(10字内)', 'suggestion': '建议(10字内)', 'companies': ['公司名'] } ] }。不要输出任何 Markdown 格式。使用 Google Search 获取最新信息。` }] 
+          parts: [{ text: `你是一个专业的投资经理。请抓取最新情报并返回 JSON：{ 'items': [ { 'title', 'content', 'impact', 'suggestion', 'companies': [], 'target_audience': '适合人群(如:投流师/选品师/老板)', 'attention_worth': '1-5星级别', 'worth_reason': '研判理由(15字内)' } ] }。必须识别主体公司。` }] 
         },
         tools: [{ "google_search": {} }],
-        generationConfig: { 
-          responseMimeType: "application/json",
-          temperature: 0.1
-        }
+        generationConfig: { responseMimeType: "application/json", temperature: 0.1 }
       });
       
       const text = result.candidates?.[0]?.content?.parts?.[0]?.text;
-      if (!text) throw new Error("AI 未返回有效内容");
-      
       const parsed = JSON.parse(text);
-      if (parsed.items && Array.isArray(parsed.items)) {
+      if (parsed.items) {
         const batch = writeBatch(db);
         parsed.items.forEach(item => {
           const d = doc(collection(db, 'artifacts', APP_ID_DB, 'public', 'data', 'intel'));
@@ -183,12 +155,11 @@ const App = () => {
       }
       setIsQuotaExceeded(false);
     } catch (err) { 
-      console.error(err);
       if (err.message === "QUOTA_LIMIT") {
           setIsQuotaExceeded(true);
-          setErrorMsg("探测频率过高，触发了 API 额度限制。AI 正在休息（60 秒后重试）...");
+          setErrorMsg("触发 API 频率限制，AI 正在冷却中...");
       } else {
-          setErrorMsg("同步失败: " + err.message);
+          setErrorMsg("更新失败详细原因: " + err.message);
       }
     } finally { 
       setIsUpdating(false); 
@@ -198,17 +169,17 @@ const App = () => {
 
   const handleAdminLogin = () => {
     if (password === 'admin') setView('dashboard');
-    else setErrorMsg("验证码错误 (默认 admin)");
+    else setErrorMsg("身份验证失败");
   };
 
   const handleSaveStrategy = async () => {
     if (!db) return;
     try {
       await setDoc(doc(db, 'artifacts', APP_ID_DB, 'public', 'data', 'config', 'main'), { strategy, updatedAt: serverTimestamp() });
-      setErrorMsg("策略已更新并保存到云端");
+      setErrorMsg("策略同步成功");
       setTimeout(() => setErrorMsg(null), 3000);
     } catch (e) {
-      setErrorMsg("保存策略失败，请检查数据库权限。");
+      setErrorMsg("保存异常: " + e.message);
     }
   };
 
@@ -221,11 +192,8 @@ const App = () => {
     setAudioState({ playing: true, id: item.id });
     try {
       const res = await geminiFetch({
-        contents: [{ parts: [{ text: `请用专业的播报音朗读：标题是${item.title}。详情：${item.content}。影响分析：${item.impact}。建议：${item.suggestion}` }] }],
-        generationConfig: { 
-          responseModalities: ["AUDIO"], 
-          speechConfig: { voiceConfig: { prebuiltVoiceConfig: { voiceName: "Puck" } } } 
-        }
+        contents: [{ parts: [{ text: `请播报：${item.title}。详情：${item.content}。建议：${item.suggestion}` }] }],
+        generationConfig: { responseModalities: ["AUDIO"], speechConfig: { voiceConfig: { prebuiltVoiceConfig: { voiceName: "Puck" } } } }
       }, "generateContent", "gemini-2.5-flash-preview-tts");
 
       const audioData = res.candidates[0].content.parts[0].inlineData.data;
@@ -235,10 +203,7 @@ const App = () => {
         audioRef.current.play();
         audioRef.current.onended = () => setAudioState({ playing: false, id: null });
       }
-    } catch (e) { 
-      console.error("Audio error:", e);
-      setAudioState({ playing: false, id: null }); 
-    }
+    } catch (e) { setAudioState({ playing: false, id: null }); }
   };
 
   return (
@@ -253,15 +218,15 @@ const App = () => {
           onClick={() => { setView(view === 'home' ? 'admin' : 'home'); setErrorMsg(null); }} 
           className="flex items-center gap-2 px-5 py-2 bg-indigo-50 text-indigo-600 rounded-xl text-sm font-bold border border-indigo-100 hover:bg-indigo-100 transition-colors"
         >
-          {view === 'home' ? <><Settings size={16} /> 策略配置</> : <><ArrowLeft size={16} /> 返回雷达</>}
+          {view === 'home' ? <Settings size={16} /> : <ArrowLeft size={16} />}
         </button>
       </nav>
 
       <main className="pt-24 pb-12 px-6 max-w-4xl mx-auto">
         {errorMsg && (
             <div className={`mb-8 p-4 border rounded-2xl flex items-center gap-3 text-sm font-bold animate-in fade-in slide-in-from-top-2 ${isQuotaExceeded ? 'bg-amber-50 border-amber-100 text-amber-700' : 'bg-red-50 border-red-100 text-red-600'}`}>
-                {isQuotaExceeded ? <Coffee size={18} className="animate-bounce" /> : <AlertCircle size={18} />}
-                {errorMsg}
+                <AlertCircle size={18} />
+                <span className="flex-1">{errorMsg}</span>
             </div>
         )}
 
@@ -269,90 +234,102 @@ const App = () => {
           <div className="animate-in fade-in duration-700 slide-in-from-bottom-4">
             <header className="mb-12 flex flex-col sm:flex-row sm:items-end justify-between gap-4">
               <div>
-                <div className="flex items-center gap-2 text-indigo-600 font-black text-[10px] tracking-widest mb-2 uppercase"><Sparkles size={12} className="animate-pulse"/> 1H 自动周期监测</div>
-                <h2 className="text-4xl font-black tracking-tight text-slate-900">情报动态流</h2>
+                <div className="flex items-center gap-2 text-indigo-600 font-black text-[10px] tracking-widest mb-2 uppercase">1H Cycle Active (15 Items/hr)</div>
+                <h2 className="text-4xl font-black tracking-tight text-slate-900">情报动态轴</h2>
               </div>
               <div className="flex items-center gap-3">
-                <button 
-                  onClick={() => triggerUpdate(false)}
-                  disabled={isUpdating}
-                  className="flex items-center gap-2 px-4 py-1.5 bg-slate-900 text-white rounded-xl text-xs font-bold hover:bg-black transition-all active:scale-95 shadow-lg shadow-slate-200"
-                >
-                  <RefreshCw size={14} className={isUpdating ? "animate-spin" : ""} /> 手动即刻探测 (2条)
+                <button onClick={() => triggerUpdate(false)} disabled={isUpdating} className="flex items-center gap-2 px-4 py-2 bg-slate-900 text-white rounded-xl text-xs font-bold hover:bg-black transition-all">
+                  <RefreshCw size={14} className={isUpdating ? "animate-spin" : ""} /> 手动即刻探测
                 </button>
-                <div className={`px-4 py-1.5 rounded-xl font-mono font-black text-xl shadow-sm border transition-all duration-300 ${isQuotaExceeded ? 'bg-slate-50 text-slate-400' : 'bg-white text-slate-900'}`}>
+                <div className={`px-4 py-1.5 rounded-xl font-mono font-black text-xl shadow-sm border ${isQuotaExceeded ? 'bg-slate-50 text-slate-400' : 'bg-white text-slate-900'}`}>
                   {formatCountdown(countdown)}
                 </div>
               </div>
             </header>
             
-            <div className="relative space-y-10">
-              <div className="absolute left-8 top-4 bottom-4 w-px bg-slate-200"></div>
-              {intelList.length === 0 && !isUpdating && (
-                <div className="pl-20 py-24 text-center">
-                  <div className="w-16 h-16 bg-slate-50 rounded-full flex items-center justify-center mx-auto mb-4 text-slate-300 border border-dashed border-slate-200">
-                    <Radar size={24} className="animate-spin-slow" />
-                  </div>
-                  <p className="text-slate-400 italic font-medium">尚未捕获到有效信号，请点击上方按钮手动尝试...</p>
-                </div>
-              )}
-              {intelList.map((item) => (
-                <article key={item.id} className="relative pl-20 group">
-                  <div className="absolute left-[31px] w-[3px] h-[16px] bg-slate-300 rounded-full top-2 group-hover:bg-indigo-600 group-hover:h-12 transition-all duration-300"></div>
-                  <div className="bg-white p-6 md:p-8 rounded-[2.5rem] border border-slate-100 shadow-sm hover:shadow-xl transition-all duration-300">
-                    <div className="flex justify-between mb-4 items-start gap-4">
-                      <h3 className="text-2xl font-bold leading-tight text-slate-900">{item.title}</h3>
-                      <button 
-                        onClick={() => speakIntel(item)} 
-                        className={`p-3 rounded-full transition-all shrink-0 ${audioState.id === item.id ? 'bg-indigo-600 text-white animate-pulse' : 'bg-slate-50 text-slate-400 hover:text-indigo-600 hover:bg-indigo-50'}`}
-                      >
-                        {audioState.id === item.id ? <Pause size={18}/> : <Volume2 size={18}/>}
-                      </button>
+            <div className="relative space-y-12">
+              {/* 修正后的时间轴引导线 */}
+              <div className="absolute left-10 top-4 bottom-4 w-px bg-slate-200"></div>
+              {intelList.length === 0 && !isUpdating && <div className="pl-24 py-24 text-slate-300 italic font-medium">尚未捕获到有效信号，请点击上方按钮...</div>}
+              
+              {intelList.map((item) => {
+                const date = item.createdAt ? new Date(item.createdAt.seconds * 1000) : new Date();
+                return (
+                  <article key={item.id} className="relative pl-24 group">
+                    {/* 修正后的时间标记：对齐到轴线左侧 */}
+                    <div className="absolute left-0 top-1.5 w-8 text-right">
+                        <span className="text-[9px] font-black text-slate-300 uppercase leading-none block">{date.toLocaleDateString('zh-CN', {month:'2-digit', day:'2-digit'})}</span>
+                        <span className="text-[11px] font-mono font-bold text-slate-400 block mt-1">{date.toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'})}</span>
                     </div>
-                    {item.companies && item.companies.length > 0 && (
-                      <div className="flex flex-wrap gap-2 mb-6">
-                        {item.companies.map((c, i) => (
-                          <span key={i} className="bg-slate-900 text-white text-[10px] font-black px-3 py-1 rounded-lg uppercase tracking-tight flex items-center gap-1.5 shadow-sm">
-                            <Building2 size={10}/>{c}
-                          </span>
-                        ))}
+                    
+                    {/* 修正后的时间点：完美居中在 40px (left-10) 的轴线上 */}
+                    <div className="absolute left-[34px] top-3 w-3 h-3 bg-slate-100 rounded-full border-2 border-slate-200 group-hover:border-indigo-600 group-hover:bg-indigo-600 transition-all z-10 shadow-[0_0_0_4px_#F8FAFC]"></div>
+                    
+                    <div className="bg-white p-6 md:p-8 rounded-[2.5rem] border border-slate-100 shadow-sm hover:shadow-xl transition-all duration-300">
+                      <div className="flex justify-between mb-4 items-start gap-4">
+                        <h3 className="text-2xl font-bold leading-tight text-slate-900">{item.title}</h3>
+                        <button onClick={() => speakIntel(item)} className={`p-3 rounded-full transition-all shrink-0 ${audioState.id === item.id ? 'bg-indigo-600 text-white animate-pulse' : 'bg-slate-50 text-slate-400 hover:text-indigo-600'}`}>
+                          {audioState.id === item.id ? <Pause size={18}/> : <Volume2 size={18}/>}
+                        </button>
                       </div>
-                    )}
-                    <p className="text-slate-500 mb-8 leading-relaxed text-lg">{item.content}</p>
-                    <div className="flex flex-wrap gap-3">
-                      <div className="px-4 py-1.5 bg-blue-50 text-blue-700 rounded-2xl text-[11px] font-black uppercase flex items-center gap-2 border border-blue-100 shadow-sm">
-                        <Zap size={14}/> {item.impact}
-                      </div>
-                      <div className="px-4 py-1.5 bg-emerald-50 text-emerald-700 rounded-2xl text-[11px] font-black uppercase flex items-center gap-2 border border-emerald-100 shadow-sm">
-                        <Lightbulb size={14}/> {item.suggestion}
+
+                      {item.companies && item.companies.length > 0 && (
+                        <div className="flex flex-wrap gap-2 mb-6">
+                          {item.companies.map((c, i) => (
+                            <span key={i} className="bg-slate-900 text-white text-[10px] font-black px-3 py-1 rounded-lg uppercase tracking-tight flex items-center gap-1.5 shadow-sm">
+                              <Building2 size={10}/>{c}
+                            </span>
+                          ))}
+                        </div>
+                      )}
+                      
+                      <p className="text-slate-500 mb-8 leading-relaxed text-lg">{item.content}</p>
+                      
+                      <div className="grid grid-cols-1 md:grid-cols-2 gap-4 pt-6 border-t border-slate-50">
+                        <div className="flex flex-col gap-2">
+                           <div className="flex items-center gap-2 text-[10px] font-black text-slate-400 uppercase tracking-widest">
+                               <Users size={12} /> 受影响从业者: <span className="text-indigo-600">{item.target_audience || '全领域'}</span>
+                           </div>
+                           <div className="px-4 py-2 bg-indigo-50/50 rounded-2xl text-[12px] font-medium text-slate-600 border border-indigo-50">
+                               💡 {item.suggestion}
+                           </div>
+                        </div>
+                        <div className="flex flex-col gap-2">
+                           <div className="flex items-center gap-2 text-[10px] font-black text-slate-400 uppercase tracking-widest">
+                               <Star size={12} /> 关注权重: 
+                               <div className="flex gap-0.5 ml-1">
+                                  {[...Array(5)].map((_, idx) => (
+                                    <Star key={idx} size={10} className={idx < parseInt(item.attention_worth || 3) ? "fill-amber-400 text-amber-400" : "text-slate-200"} />
+                                  ))}
+                               </div>
+                           </div>
+                           <div className="px-4 py-2 bg-amber-50/50 rounded-2xl text-[12px] font-bold text-amber-900 italic border border-amber-50">
+                               “{item.worth_reason || '值得关注'}”
+                           </div>
+                        </div>
                       </div>
                     </div>
-                  </div>
-                </article>
-              ))}
+                  </article>
+                );
+              })}
             </div>
           </div>
         )}
 
         {view === 'admin' && (
-          <div className="max-w-md mx-auto bg-white p-12 rounded-[3.5rem] border border-slate-100 shadow-2xl text-center animate-in zoom-in-95 duration-300">
-            <div className="w-20 h-20 bg-indigo-50 rounded-3xl flex items-center justify-center mx-auto mb-8 text-indigo-600 shadow-inner">
-              <ShieldCheck size={40} />
+          <div className="h-[60vh] flex items-center justify-center p-8">
+            <div className="max-w-md w-full bg-white p-12 rounded-[3.5rem] border border-slate-100 shadow-2xl text-center">
+              <ShieldCheck size={48} className="mx-auto mb-6 text-indigo-600" />
+              <h2 className="text-3xl font-black mb-10 text-slate-900 tracking-tight">管理验证</h2>
+              <input 
+                type="password" 
+                value={password} 
+                onChange={(e)=>setPassword(e.target.value)} 
+                placeholder="请输入密钥 PIN" 
+                className="w-full h-16 bg-slate-50 border-2 border-transparent rounded-2xl text-center text-xl font-bold mb-6 focus:border-indigo-600 outline-none" 
+              />
+              <button onClick={handleAdminLogin} className="w-full h-16 bg-indigo-600 text-white rounded-2xl font-black text-lg hover:bg-indigo-700">进入后台</button>
             </div>
-            <h2 className="text-3xl font-black mb-10 text-slate-900 tracking-tight">管理验证</h2>
-            <input 
-              type="password" 
-              value={password} 
-              onChange={(e)=>setPassword(e.target.value)} 
-              placeholder="默认密码 admin" 
-              className="w-full h-16 bg-slate-50 border-2 border-transparent rounded-2xl text-center text-xl font-bold mb-6 focus:border-indigo-600 focus:bg-white outline-none transition-all" 
-            />
-            <button 
-              onClick={handleAdminLogin} 
-              className="w-full h-16 bg-indigo-600 text-white rounded-2xl font-black text-lg hover:bg-indigo-700 transition-all shadow-lg shadow-indigo-100 active:scale-95"
-            >
-              验证并进入
-            </button>
           </div>
         )}
 
@@ -363,45 +340,29 @@ const App = () => {
               <div className="lg:col-span-8">
                 <div className="bg-white p-10 rounded-[3rem] border border-slate-100 shadow-sm">
                   <div className="flex justify-between items-center mb-6">
-                    <h4 className="font-black text-xl text-slate-900">抓取指令策略</h4>
-                    <span className="text-[10px] font-black text-indigo-600 bg-indigo-50 px-2 py-1 rounded-md tracking-widest uppercase">Auto-Sync: 1 Hour</span>
+                    <h4 className="font-black text-xl text-slate-900">AI 深度策略指令</h4>
+                    <span className="text-[10px] font-black text-indigo-600 bg-indigo-50 px-2 py-1 rounded-md uppercase">Frequency: 1H (15 Items)</span>
                   </div>
-                  <textarea 
-                    value={strategy} 
-                    onChange={(e)=>setStrategy(e.target.value)} 
-                    className="w-full h-64 p-8 bg-slate-50 border-2 border-transparent rounded-3xl text-lg font-bold outline-none mb-8 focus:border-indigo-100 focus:bg-white transition-all" 
-                    placeholder="输入你想关注的动态领域、关键词或出海方向..." 
-                  />
+                  <textarea value={strategy} onChange={(e)=>setStrategy(e.target.value)} className="w-full h-64 p-8 bg-slate-50 border-none rounded-3xl text-lg font-bold outline-none mb-8 focus:ring-2 ring-indigo-100 transition-all" />
                   <div className="grid sm:grid-cols-2 gap-4">
-                    <button onClick={handleSaveStrategy} className="h-16 bg-slate-900 text-white rounded-2xl font-black hover:bg-black transition-all shadow-lg">
-                      保存云端配置
-                    </button>
-                    <button 
-                      onClick={()=>triggerUpdate(false)} 
-                      disabled={isUpdating} 
-                      className={`h-16 rounded-2xl font-black transition-all ${isUpdating ? 'bg-slate-100 text-slate-400' : 'bg-indigo-600 text-white shadow-xl shadow-indigo-100 hover:bg-indigo-700 active:scale-95'}`}
-                    >
-                      {isUpdating ? '正在探测情报...' : '强制即刻探测 (2条)'}
+                    <button onClick={handleSaveStrategy} className="h-16 bg-slate-900 text-white rounded-2xl font-black hover:bg-black">保存同步配置</button>
+                    <button onClick={()=>triggerUpdate(false)} disabled={isUpdating} className={`h-16 rounded-2xl font-black transition-all ${isUpdating ? 'bg-slate-100 text-slate-400' : 'bg-indigo-600 text-white shadow-xl shadow-indigo-100'}`}>
+                      {isUpdating ? '探测中...' : '即刻强制抓取'}
                     </button>
                   </div>
                 </div>
               </div>
               <div className="lg:col-span-4 h-full">
                 <div className="bg-white p-8 rounded-[3.5rem] border border-slate-100 shadow-sm h-full max-h-[700px] flex flex-col">
-                  <h4 className="font-black text-xl mb-8 flex items-center gap-2 text-slate-400"><History size={20}/> 审计日志</h4>
+                  <h4 className="font-black text-xl mb-8 flex items-center gap-2 text-slate-400"><History size={20}/> 执行日志</h4>
                   <div className="flex-1 overflow-y-auto space-y-3 pr-2">
-                    {logs.length === 0 && <p className="text-slate-300 italic text-sm text-center py-10">尚无操作记录</p>}
                     {logs.map(log => (
-                      <div key={log.id} className="p-5 bg-slate-50 rounded-2xl border border-slate-100 transition-hover hover:border-indigo-100">
-                        <div className="flex justify-between mb-2">
-                          <span className={`text-[9px] font-black px-2.5 py-0.5 rounded-full ${log.type === 'AUTO' ? 'bg-indigo-100 text-indigo-600' : 'bg-amber-100 text-amber-600'}`}>
-                            {log.type === 'AUTO' ? '自动监测' : '手动干预'}
-                          </span>
-                          <span className="text-[10px] font-mono text-slate-400">
-                            {log.createdAt ? new Date(log.createdAt.seconds * 1000).toLocaleTimeString() : '同步中'}
-                          </span>
+                      <div key={log.id} className="p-5 bg-slate-50 rounded-2xl border border-slate-100">
+                        <div className="flex justify-between mb-2 text-[10px] font-black uppercase">
+                          <span className={log.type === 'AUTO' ? 'text-indigo-600' : 'text-amber-600'}>{log.type}</span>
+                          <span className="text-slate-400">{log.createdAt ? new Date(log.createdAt.seconds * 1000).toLocaleTimeString() : '...'}</span>
                         </div>
-                        <div className="text-[13px] font-bold text-slate-700">捕获到 {log.count} 条新信号</div>
+                        <div className="text-[13px] font-bold text-slate-700">同步动态: {log.count} 条</div>
                       </div>
                     ))}
                   </div>
@@ -411,16 +372,6 @@ const App = () => {
           </div>
         )}
       </main>
-
-      <style>{`
-        @keyframes spin-slow {
-          from { transform: rotate(0deg); }
-          to { transform: rotate(360deg); }
-        }
-        .animate-spin-slow {
-          animation: spin-slow 12s linear infinite;
-        }
-      `}</style>
     </div>
   );
 };
