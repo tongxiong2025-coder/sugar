@@ -10,7 +10,7 @@ import {
 import { 
   Radar, ShieldCheck, Zap, 
   Lightbulb, History, Settings, 
-  ArrowLeft, Building2, Volume2, Pause, AlertCircle, Sparkles, Coffee
+  ArrowLeft, Building2, Volume2, Pause, AlertCircle, Sparkles, Coffee, RefreshCw
 } from 'lucide-react';
 
 /**
@@ -30,6 +30,7 @@ const firebaseConfig = {
 // 在预览执行环境中，必须将 API Key 设置为空字符串，环境会自动注入有效密钥
 const GEMINI_API_KEY = ""; 
 const APP_ID_DB = "sugar-radar-prod-fast"; 
+const AUTO_UPDATE_INTERVAL = 3600; // 自动更新间隔：1小时 (秒)
 
 const app = initializeApp(firebaseConfig);
 const auth = getAuth(app);
@@ -44,10 +45,18 @@ const App = () => {
   const [strategy, setStrategy] = useState('聚焦全球跨境电商、AI潮玩、直播出海及前沿科技动态');
   const [isUpdating, setIsUpdating] = useState(false);
   const [errorMsg, setErrorMsg] = useState(null);
-  const [countdown, setCountdown] = useState(10); 
+  const [countdown, setCountdown] = useState(AUTO_UPDATE_INTERVAL); 
   const [isQuotaExceeded, setIsQuotaExceeded] = useState(false); 
   const [audioState, setAudioState] = useState({ playing: false, id: null });
   const audioRef = useRef(null);
+
+  // 格式化倒计时显示 (HH:MM:SS)
+  const formatCountdown = (seconds) => {
+    const h = Math.floor(seconds / 3600);
+    const m = Math.floor((seconds % 3600) / 60);
+    const s = seconds % 60;
+    return [h, m, s].map(v => v.toString().padStart(2, '0')).join(':');
+  };
 
   useEffect(() => {
     const unsubscribe = onAuthStateChanged(auth, async (u) => {
@@ -91,19 +100,20 @@ const App = () => {
     return () => { unsubIntel(); unsubLogs(); };
   }, [user]);
 
+  // 1小时自动更新计时器
   useEffect(() => {
     if (!user) return;
     const timer = setInterval(() => {
       setCountdown((prev) => {
         if (prev <= 1) {
-          if (!isUpdating) triggerUpdate(true); 
-          return isQuotaExceeded ? 60 : 10; 
+          if (!isUpdating) triggerUpdate(true); // 触发 5 条更新
+          return AUTO_UPDATE_INTERVAL; 
         }
         return prev - 1;
       });
     }, 1000);
     return () => clearInterval(timer);
-  }, [strategy, user, isUpdating, isQuotaExceeded]);
+  }, [strategy, user, isUpdating]);
 
   const geminiFetch = async (payload, endpoint = "generateContent", model = "gemini-2.5-flash-preview-09-2025") => {
     const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:${endpoint}?key=${GEMINI_API_KEY}`;
@@ -141,11 +151,14 @@ const App = () => {
     setIsUpdating(true);
     if (!isAuto) setErrorMsg(null);
 
+    // 根据是否自动触发决定抓取数量
+    const count = isAuto ? 5 : 2;
+
     try {
       const result = await geminiFetch({
-        contents: [{ parts: [{ text: `根据当前策略搜集最新商业情报动态：${strategy}` }] }],
+        contents: [{ parts: [{ text: `根据当前策略搜集 ${count} 条最新商业情报动态：${strategy}` }] }],
         systemInstruction: { 
-          parts: [{ text: "你是一个专业的商业情报专家。请抓取2条最新动态并严格返回 JSON 格式：{ 'items': [ { 'title': '标题', 'content': '内容', 'impact': '影响(10字内)', 'suggestion': '建议(10字内)', 'companies': ['公司名'] } ] }。不要输出任何 Markdown 格式。使用 Google Search 获取最新信息。" }] 
+          parts: [{ text: `你是一个专业的商业情报专家。请抓取 ${count} 条最新动态并严格返回 JSON 格式：{ 'items': [ { 'title': '标题', 'content': '内容', 'impact': '影响(10字内)', 'suggestion': '建议(10字内)', 'companies': ['公司名'] } ] }。不要输出任何 Markdown 格式。使用 Google Search 获取最新信息。` }] 
         },
         tools: [{ "google_search": {} }],
         generationConfig: { 
@@ -173,13 +186,13 @@ const App = () => {
       console.error(err);
       if (err.message === "QUOTA_LIMIT") {
           setIsQuotaExceeded(true);
-          setErrorMsg("AI 正在休息（额度限制，进入 60 秒冷却期）");
+          setErrorMsg("探测频率过高，触发了 API 额度限制。AI 正在休息（60 秒后重试）...");
       } else {
           setErrorMsg("同步失败: " + err.message);
       }
     } finally { 
       setIsUpdating(false); 
-      if (!isAuto) setCountdown(isQuotaExceeded ? 60 : 10); 
+      if (!isAuto) setCountdown(AUTO_UPDATE_INTERVAL); 
     }
   };
 
@@ -254,13 +267,22 @@ const App = () => {
 
         {view === 'home' && (
           <div className="animate-in fade-in duration-700 slide-in-from-bottom-4">
-            <header className="mb-12 flex justify-between items-end">
+            <header className="mb-12 flex flex-col sm:flex-row sm:items-end justify-between gap-4">
               <div>
-                <div className="flex items-center gap-2 text-indigo-600 font-black text-[10px] tracking-widest mb-2 uppercase"><Sparkles size={12} className="animate-pulse"/> 实时监测中</div>
+                <div className="flex items-center gap-2 text-indigo-600 font-black text-[10px] tracking-widest mb-2 uppercase"><Sparkles size={12} className="animate-pulse"/> 1H 自动周期监测</div>
                 <h2 className="text-4xl font-black tracking-tight text-slate-900">情报动态流</h2>
               </div>
-              <div className={`px-5 py-1.5 rounded-2xl font-mono font-black text-2xl shadow-sm transition-all duration-300 ${isQuotaExceeded ? 'bg-slate-200 text-slate-400' : 'bg-slate-900 text-white'}`}>
-                {countdown}s
+              <div className="flex items-center gap-3">
+                <button 
+                  onClick={() => triggerUpdate(false)}
+                  disabled={isUpdating}
+                  className="flex items-center gap-2 px-4 py-1.5 bg-slate-900 text-white rounded-xl text-xs font-bold hover:bg-black transition-all active:scale-95 shadow-lg shadow-slate-200"
+                >
+                  <RefreshCw size={14} className={isUpdating ? "animate-spin" : ""} /> 手动即刻探测 (2条)
+                </button>
+                <div className={`px-4 py-1.5 rounded-xl font-mono font-black text-xl shadow-sm border transition-all duration-300 ${isQuotaExceeded ? 'bg-slate-50 text-slate-400' : 'bg-white text-slate-900'}`}>
+                  {formatCountdown(countdown)}
+                </div>
               </div>
             </header>
             
@@ -271,7 +293,7 @@ const App = () => {
                   <div className="w-16 h-16 bg-slate-50 rounded-full flex items-center justify-center mx-auto mb-4 text-slate-300 border border-dashed border-slate-200">
                     <Radar size={24} className="animate-spin-slow" />
                   </div>
-                  <p className="text-slate-400 italic font-medium">尚未捕获到有效信号，请尝试点击策略配置进行手动抓取...</p>
+                  <p className="text-slate-400 italic font-medium">尚未捕获到有效信号，请点击上方按钮手动尝试...</p>
                 </div>
               )}
               {intelList.map((item) => (
@@ -342,7 +364,7 @@ const App = () => {
                 <div className="bg-white p-10 rounded-[3rem] border border-slate-100 shadow-sm">
                   <div className="flex justify-between items-center mb-6">
                     <h4 className="font-black text-xl text-slate-900">抓取指令策略</h4>
-                    <span className="text-[10px] font-black text-indigo-600 bg-indigo-50 px-2 py-1 rounded-md">云端同步已开启</span>
+                    <span className="text-[10px] font-black text-indigo-600 bg-indigo-50 px-2 py-1 rounded-md tracking-widest uppercase">Auto-Sync: 1 Hour</span>
                   </div>
                   <textarea 
                     value={strategy} 
@@ -359,7 +381,7 @@ const App = () => {
                       disabled={isUpdating} 
                       className={`h-16 rounded-2xl font-black transition-all ${isUpdating ? 'bg-slate-100 text-slate-400' : 'bg-indigo-600 text-white shadow-xl shadow-indigo-100 hover:bg-indigo-700 active:scale-95'}`}
                     >
-                      {isUpdating ? '正在探测情报...' : '强制即刻探测'}
+                      {isUpdating ? '正在探测情报...' : '强制即刻探测 (2条)'}
                     </button>
                   </div>
                 </div>
