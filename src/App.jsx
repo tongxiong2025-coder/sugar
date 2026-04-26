@@ -27,7 +27,7 @@ const firebaseConfig = {
   appId: "1:388090302429:web:97657e8f4690a5b17e3034"
 };
 
-const GEMINI_API_KEY = ""; 
+const GEMINI_API_KEY = "AIzaSyC8eaRkyMNTvcUU3f5CR8HI5aIBub7-6-s"; 
 const APP_ID_DB = "sugar-radar-prod-fast"; 
 const AUTO_UPDATE_INTERVAL = 3600; 
 
