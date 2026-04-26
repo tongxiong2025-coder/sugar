@@ -25,7 +25,6 @@ const firebaseConfig = {
   storageBucket: "sugar-radar.firebasestorage.app",
   messagingSenderId: "388090302429",
   appId: "1:388090302429:web:97657e8f4690a5b17e3034",
-  appId: "G-0QSCQEV3L8"
 };
 
 const GEMINI_API_KEY = "AIzaSyBu_Y8pO8Bv8iNuvHBvoE0v_o5EbDOBnPc";
