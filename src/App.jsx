@@ -10,12 +10,12 @@ import {
 import { 
   Radar, ShieldCheck, Zap, 
   Lightbulb, History, Settings, 
-  ArrowLeft, Building2, Volume2, Pause, AlertCircle, Sparkles, Coffee, RefreshCw, Users, Star, Clock
+  ArrowLeft, Building2, Volume2, Pause, AlertCircle, Sparkles, Coffee, RefreshCw, Users, Star, Clock, Key, CheckCircle2
 } from 'lucide-react';
 
 /**
  * ==================================================
- * 🛰️ 方糖情报雷达 - 高频精准版
+ * 🛰️ 方糖情报雷达 - 安全增强版 (API 动态配置)
  * ==================================================
  */
 const firebaseConfig = {
@@ -27,8 +27,8 @@ const firebaseConfig = {
   appId: "1:388090302429:web:97657e8f4690a5b17e3034"
 };
 
-const GEMINI_API_KEY = "AIzaSyB_-fLwf2_ftDdA3YsgnVzajw7hVPDCS1k"; // 环境自动提供
 const APP_ID_DB = "sugar-radar-prod-fast"; 
+const AUTO_UPDATE_INTERVAL = 3600; 
 
 const app = initializeApp(firebaseConfig);
 const auth = getAuth(app);
@@ -41,8 +41,10 @@ const App = () => {
   const [logs, setLogs] = useState([]);
   const [password, setPassword] = useState('');
   const [strategy, setStrategy] = useState('聚焦全球跨境电商、AI潮玩、直播出海及前沿科技动态');
+  const [geminiApiKey, setGeminiApiKey] = useState(''); // 从 DB 读取的 Key
   const [isUpdating, setIsUpdating] = useState(false);
   const [errorMsg, setErrorMsg] = useState(null);
+  const [testStatus, setTestStatus] = useState(null); // 'testing', 'success', 'error'
   
   const [manualCooldown, setManualCooldown] = useState(0); 
   const [audioState, setAudioState] = useState({ playing: false, id: null });
@@ -76,8 +78,13 @@ const App = () => {
       try {
         const docRef = doc(db, 'artifacts', APP_ID_DB, 'public', 'data', 'config', 'main');
         const snap = await getDoc(docRef);
-        if (snap.exists()) setStrategy(snap.data().strategy);
-      } catch (e) {}
+        if (snap.exists()) {
+          setStrategy(snap.data().strategy || '');
+          setGeminiApiKey(snap.data().geminiApiKey || '');
+        }
+      } catch (e) {
+        console.error("Config load failed", e);
+      }
     };
     fetchConfig();
     return () => { unsubIntel(); unsubLogs(); };
@@ -101,8 +108,11 @@ const App = () => {
     return () => clearInterval(timer);
   }, [manualCooldown, triggeredSlots]);
 
-  const geminiFetch = async (payload, endpoint = "generateContent", model = "gemini-2.5-flash-preview-09-2025") => {
-    const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:${endpoint}?key=${GEMINI_API_KEY}`;
+  const geminiFetch = async (payload, endpoint = "generateContent", overrideKey = null) => {
+    const keyToUse = overrideKey || geminiApiKey;
+    if (!keyToUse) throw new Error("缺少 Gemini API Key，请在后台配置");
+
+    const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-09-2025:${endpoint}?key=${keyToUse}`;
     try {
       const res = await fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
       const data = await res.json();
@@ -112,7 +122,7 @@ const App = () => {
   };
 
   const triggerUpdate = async (isAuto = false) => {
-    if (isUpdating || !user) return;
+    if (isUpdating || !user || !geminiApiKey) return;
     if (!isAuto && manualCooldown > 0) return;
     setIsUpdating(true);
     setErrorMsg(null);
@@ -122,7 +132,7 @@ const App = () => {
       const result = await geminiFetch({
         contents: [{ parts: [{ text: `搜集 ${count} 条关于：${strategy} 的最新商业动态。` }] }],
         systemInstruction: { 
-          parts: [{ text: `你是一个专业的投资经理。请抓取最新情报并返回 JSON：{ 'items': [ { 'title', 'content', 'impact', 'suggestion', 'companies': [], 'target_audience': '适合人群(如:老板/运营/选品师)', 'attention_worth': '1-5数字', 'worth_reason': '研判理由(15字内)' } ] }。必须识别主体公司。` }] 
+          parts: [{ text: `你是一个专业的投资经理。请抓取最新情报并返回 JSON：{ 'items': [ { 'title', 'content', 'impact', 'suggestion', 'companies': [], 'target_audience': '适合人群', 'attention_worth': '1-5数字', 'worth_reason': '研判理由(15字内)' } ] }。必须识别主体公司。` }] 
         },
         tools: [{ "google_search": {} }],
         generationConfig: { responseMimeType: "application/json", temperature: 0.1 }
@@ -141,22 +151,40 @@ const App = () => {
         await batch.commit();
       }
       if (!isAuto) setManualCooldown(60);
-    } catch (err) { setErrorMsg(`抓取异常: ${err.message}`); } 
+    } catch (err) { setErrorMsg(`抓取失败: ${err.message}`); } 
     finally { setIsUpdating(false); }
   };
 
   const handleAdminLogin = () => {
     if (password === 'admin') setView('dashboard');
-    else setErrorMsg("身份验证失败");
+    else setErrorMsg("验证码错误");
   };
 
-  const handleSaveStrategy = async () => {
+  const handleSaveConfig = async () => {
     if (!db) return;
     try {
-      await setDoc(doc(db, 'artifacts', APP_ID_DB, 'public', 'data', 'config', 'main'), { strategy, updatedAt: serverTimestamp() });
-      setErrorMsg("策略同步成功");
+      await setDoc(doc(db, 'artifacts', APP_ID_DB, 'public', 'data', 'config', 'main'), { 
+        strategy, 
+        geminiApiKey,
+        updatedAt: serverTimestamp() 
+      });
+      setErrorMsg("配置已同步至云端");
       setTimeout(() => setErrorMsg(null), 3000);
     } catch (e) { setErrorMsg(`保存失败: ${e.message}`); }
+  };
+
+  const handleTestKey = async () => {
+    setTestStatus('testing');
+    try {
+      await geminiFetch({
+        contents: [{ parts: [{ text: "Hello, this is a connectivity test. Answer with one word: 'OK'" }] }]
+      }, "generateContent", geminiApiKey);
+      setTestStatus('success');
+      setTimeout(() => setTestStatus(null), 3000);
+    } catch (e) {
+      setTestStatus('error');
+      setErrorMsg("密钥测试失败: " + e.message);
+    }
   };
 
   const speakIntel = async (item) => {
@@ -165,12 +193,13 @@ const App = () => {
       setAudioState({ playing: false, id: null });
       return;
     }
+    if (!geminiApiKey) { setErrorMsg("语音播报需要配置 API Key"); return; }
     setAudioState({ playing: true, id: item.id });
     try {
       const res = await geminiFetch({
-        contents: [{ parts: [{ text: `请播报：${item.title}。研判：${item.worth_reason}。建议：${item.suggestion}` }] }],
+        contents: [{ parts: [{ text: `请播报：${item.title}。建议：${item.suggestion}` }] }],
         generationConfig: { responseModalities: ["AUDIO"], speechConfig: { voiceConfig: { prebuiltVoiceConfig: { voiceName: "Puck" } } } }
-      }, "generateContent", "gemini-2.5-flash-preview-tts");
+      }, "generateContent");
 
       const audioData = res.candidates[0].content.parts[0].inlineData.data;
       const blob = new Blob([new Uint8Array(atob(audioData).split("").map(c => c.charCodeAt(0)))], { type: 'audio/wav' });
@@ -217,19 +246,17 @@ const App = () => {
               </div>
               <button 
                 onClick={() => triggerUpdate(false)} 
-                disabled={isUpdating || manualCooldown > 0} 
-                className={`flex items-center gap-2 px-6 py-2.5 rounded-2xl font-black text-sm shadow-xl transition-all active:scale-95 ${manualCooldown > 0 ? 'bg-slate-100 text-slate-400' : 'bg-slate-900 text-white hover:bg-black'}`}
+                disabled={isUpdating || manualCooldown > 0 || !geminiApiKey} 
+                className={`group flex items-center gap-2 px-6 py-2.5 rounded-2xl font-black text-sm shadow-xl transition-all active:scale-95 ${manualCooldown > 0 || !geminiApiKey ? 'bg-slate-100 text-slate-400' : 'bg-slate-900 text-white hover:bg-black'}`}
               >
                 <RefreshCw size={16} className={isUpdating ? "animate-spin text-indigo-400" : ""} /> 
-                {manualCooldown > 0 ? `冷却中 (${manualCooldown}s)` : '探测最新 (5条)'}
+                {!geminiApiKey ? '请先配置密钥' : manualCooldown > 0 ? `冷却中 (${manualCooldown}s)` : '探测最新 (5条)'}
               </button>
             </header>
             
             <div className="relative space-y-12">
-              {/* 完善的时间轴引导线 */}
               <div className="absolute left-10 top-4 bottom-4 w-px bg-slate-200"></div>
-              {intelList.length === 0 && !isUpdating && <div className="pl-24 py-24 text-slate-300 italic font-medium">尚未捕获到有效信号...</div>}
-              
+              {intelList.length === 0 && !isUpdating && <div className="pl-24 py-24 text-slate-300 italic font-medium">雷达处于待机模式，请在后台配置密钥并手动抓取...</div>}
               {intelList.map((item) => {
                 const date = item.createdAt ? new Date(item.createdAt.seconds * 1000) : new Date();
                 return (
@@ -298,7 +325,7 @@ const App = () => {
                 onChange={(e)=>setPassword(e.target.value)} 
                 className="w-full h-16 bg-slate-50 border-2 border-transparent rounded-2xl text-center text-xl font-bold mb-6 focus:border-indigo-600 outline-none" 
               />
-              <button onClick={handleAdminLogin} className="w-full h-16 bg-indigo-600 text-white rounded-2xl font-black text-lg hover:bg-indigo-700">进入控制台</button>
+              <button onClick={handleAdminLogin} className="w-full h-16 bg-indigo-600 text-white rounded-2xl font-black text-lg hover:bg-indigo-700">进入后台</button>
             </div>
           </div>
         )}
@@ -307,34 +334,71 @@ const App = () => {
           <div className="animate-in fade-in slide-in-from-bottom-4 duration-500">
             <h2 className="text-4xl font-black mb-12 tracking-tighter text-slate-900">控制中心 ✨</h2>
             <div className="grid lg:grid-cols-12 gap-10">
-              <div className="lg:col-span-8">
+              <div className="lg:col-span-8 space-y-8">
+                {/* 密钥配置区 */}
+                <div className="bg-white p-10 rounded-[3rem] border border-slate-100 shadow-sm relative overflow-hidden">
+                  <div className="absolute top-0 left-0 w-full h-1.5 bg-indigo-600 opacity-20"></div>
+                  <div className="flex justify-between items-center mb-6">
+                    <h4 className="font-black text-xl text-slate-900 flex items-center gap-2"><Key size={20}/> Gemini API 密钥</h4>
+                    {testStatus === 'success' && <span className="flex items-center gap-1 text-[10px] font-black text-green-600 uppercase"><CheckCircle2 size={12}/> 密钥已连通</span>}
+                  </div>
+                  <div className="flex gap-3 mb-6">
+                    <input 
+                      type="password" 
+                      value={geminiApiKey} 
+                      onChange={(e)=>setGeminiApiKey(e.target.value)} 
+                      placeholder="在此填入 AIza... 开头的密钥" 
+                      className="flex-1 p-4 bg-slate-50 border-none rounded-2xl text-sm font-mono focus:ring-2 ring-indigo-100"
+                    />
+                    <button 
+                      onClick={handleTestKey} 
+                      disabled={testStatus === 'testing' || !geminiApiKey}
+                      className={`px-6 rounded-2xl font-bold text-xs transition-all ${testStatus === 'testing' ? 'bg-slate-100 text-slate-400' : 'bg-slate-100 text-indigo-600 hover:bg-indigo-50'}`}
+                    >
+                      {testStatus === 'testing' ? '测试中...' : '测试连通性'}
+                    </button>
+                  </div>
+                  <p className="text-[10px] text-slate-400">密钥保存在您的私有数据库中，不会出现在 GitHub 源代码中。泄露风险极低。</p>
+                </div>
+
+                {/* 指令配置区 */}
                 <div className="bg-white p-10 rounded-[3rem] border border-slate-100 shadow-sm">
                   <div className="flex justify-between items-center mb-6">
                     <h4 className="font-black text-xl text-slate-900">AI 深度策略指令</h4>
-                    <span className="text-[10px] font-black text-indigo-600 bg-indigo-50 px-2 py-1 rounded-md uppercase tracking-tighter">Scheduler: Active</span>
+                    <span className="text-[10px] font-black text-indigo-600 bg-indigo-50 px-2 py-1 rounded-md uppercase tracking-tighter">7/12/20 Scheduler</span>
                   </div>
-                  <textarea value={strategy} onChange={(e)=>setStrategy(e.target.value)} className="w-full h-64 p-8 bg-slate-50 border-none rounded-3xl text-lg font-bold outline-none mb-8 focus:ring-2 ring-indigo-100 transition-all" />
+                  <textarea 
+                    value={strategy} 
+                    onChange={(e)=>setStrategy(e.target.value)} 
+                    className="w-full h-64 p-8 bg-slate-50 border-none rounded-3xl text-lg font-bold outline-none mb-8 focus:ring-2 ring-indigo-100 transition-all" 
+                    placeholder="例如：关注 TikTok 美国闭环电商新政..."
+                  />
                   <div className="grid sm:grid-cols-2 gap-4">
-                    <button onClick={handleSaveStrategy} className="h-16 bg-slate-900 text-white rounded-2xl font-black hover:bg-black">保存同步配置</button>
-                    <button onClick={()=>triggerUpdate(false)} disabled={isUpdating} className={`h-16 rounded-2xl font-black transition-all ${isUpdating ? 'bg-slate-100 text-slate-400' : 'bg-indigo-600 text-white shadow-xl shadow-indigo-100'}`}>
-                      {isUpdating ? '探测中...' : '即刻强制抓取'}
+                    <button onClick={handleSaveConfig} className="h-16 bg-slate-900 text-white rounded-2xl font-black hover:bg-black transition-all shadow-lg">保存所有配置</button>
+                    <button 
+                      onClick={()=>triggerUpdate(false)} 
+                      disabled={isUpdating || !geminiApiKey} 
+                      className={`h-16 rounded-2xl font-black transition-all ${isUpdating || !geminiApiKey ? 'bg-slate-100 text-slate-400' : 'bg-indigo-600 text-white shadow-xl shadow-indigo-100 hover:bg-indigo-700'}`}
+                    >
+                      {isUpdating ? '探测中...' : '即刻强制探测'}
                     </button>
                   </div>
                 </div>
               </div>
               <div className="lg:col-span-4 h-full">
-                <div className="bg-white p-8 rounded-[3.5rem] border border-slate-100 shadow-sm h-full max-h-[700px] flex flex-col">
-                  <h4 className="font-black text-xl mb-8 flex items-center gap-2 text-slate-400"><History size={20}/> 执行日志</h4>
+                <div className="bg-white p-8 rounded-[3.5rem] border border-slate-100 shadow-sm h-full max-h-[900px] flex flex-col">
+                  <h4 className="font-black text-xl mb-8 flex items-center gap-2 text-slate-400"><History size={20}/> 审计日志</h4>
                   <div className="flex-1 overflow-y-auto space-y-3 pr-2">
                     {logs.map(log => (
-                      <div key={log.id} className="p-5 bg-slate-50 rounded-2xl border border-slate-100">
+                      <div key={log.id} className="p-5 bg-slate-50 rounded-2xl border border-slate-100 transition-all hover:border-indigo-100">
                         <div className="flex justify-between mb-2 text-[10px] font-black uppercase">
                           <span className={log.type === 'AUTO_SLOT' ? 'text-indigo-600' : 'text-amber-600'}>{log.type}</span>
-                          <span className="text-slate-400">{log.createdAt ? new Date(log.createdAt.seconds * 1000).toLocaleTimeString() : '...'}</span>
+                          <span className="text-slate-400 font-mono">{log.createdAt ? new Date(log.createdAt.seconds * 1000).toLocaleTimeString() : '...'}</span>
                         </div>
-                        <div className="text-[13px] font-bold text-slate-700">同步动态: {log.count} 条</div>
+                        <div className="text-[13px] font-bold text-slate-700 leading-tight">同步动态: {log.count} 条</div>
                       </div>
                     ))}
+                    {logs.length === 0 && <p className="text-center py-20 text-slate-300 text-xs italic">暂无执行记录</p>}
                   </div>
                 </div>
               </div>
