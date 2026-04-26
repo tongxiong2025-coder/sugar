@@ -15,7 +15,7 @@ import {
 
 /**
  * ==================================================
- * 🛰️ 方糖情报雷达 - 核心配置修复版
+ * 🛰️ 方糖情报雷达 - 核心配置中心
  * ==================================================
  */
 const firebaseConfig = {
@@ -24,10 +24,11 @@ const firebaseConfig = {
   projectId: "sugar-radar", 
   storageBucket: "sugar-radar.firebasestorage.app",
   messagingSenderId: "388090302429",
-  appId: "1:388090302429:web:97657e8f4690a5b17e3034" // 已删除多余的 ID
+  appId: "1:388090302429:web:97657e8f4690a5b17e3034"
 };
 
-const GEMINI_API_KEY = "AIzaSyDr4eEsIYgT3EYgh6d3FLpHA2iUuR_4v6E"; // ⚠️ 请务必在此填入你的真实 Key
+// ⚠️ 修复建议：请访问 https://aistudio.google.com/ 重新获取 Key 并替换下方字符串
+const GEMINI_API_KEY = "AIzaSyC8eaRkyMNTvcUU3f5CR8HI5aIBub7-6-s"; 
 const APP_ID_DB = "sugar-radar-prod-fast"; 
 
 const app = initializeApp(firebaseConfig);
@@ -50,7 +51,7 @@ const App = () => {
   useEffect(() => {
     const unsubscribe = onAuthStateChanged(auth, async (u) => {
       if (u) { setUser(u); } else {
-        try { await signInAnonymously(auth); } catch (e) { setErrorMsg("身份验证失败，请检查 Firebase 设置"); }
+        try { await signInAnonymously(auth); } catch (e) { setErrorMsg("Firebase 身份验证失败"); }
       }
     });
     return () => unsubscribe();
@@ -58,19 +59,16 @@ const App = () => {
 
   useEffect(() => {
     if (!user) return;
-    // 监听情报数据
     const qIntel = query(collection(db, 'artifacts', APP_ID_DB, 'public', 'data', 'intel'));
     const unsubIntel = onSnapshot(qIntel, (snap) => {
       const data = snap.docs.map(d => ({ id: d.id, ...d.data() }));
       setIntelList(data.sort((a, b) => (b.createdAt?.seconds || 0) - (a.createdAt?.seconds || 0)).slice(0, 50));
     });
-    // 监听审计日志
     const qLogs = query(collection(db, 'artifacts', APP_ID_DB, 'public', 'data', 'logs'));
     const unsubLogs = onSnapshot(qLogs, (snap) => {
       const data = snap.docs.map(d => ({ id: d.id, ...d.data() }));
       setLogs(data.sort((a, b) => (b.createdAt?.seconds || 0) - (a.createdAt?.seconds || 0)));
     });
-    // 获取当前策略
     const fetchConfig = async () => {
       const docRef = doc(db, 'artifacts', APP_ID_DB, 'public', 'data', 'config', 'main');
       const snap = await getDoc(docRef);
@@ -95,18 +93,33 @@ const App = () => {
   }, [strategy, user, isUpdating]);
 
   const geminiFetch = async (payload, endpoint = "generateContent", model = "gemini-2.0-flash") => {
-    const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:${endpoint}?key=${GEMINI_API_KEY}`;
-    const res = await fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
-    if (!res.ok) {
-        const err = await res.json();
-        throw new Error(err.error?.message || "Gemini API 错误");
+    if (GEMINI_API_KEY.includes("在此填入")) {
+        throw new Error("检测到 API Key 仍为占位符，请先填入真实的 Key。");
     }
-    return await res.json();
+    const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:${endpoint}?key=${GEMINI_API_KEY}`;
+    
+    try {
+        const res = await fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
+        const data = await res.json();
+        
+        if (!res.ok) {
+            // 针对 Key 过期的特殊提示
+            if (data.error?.message?.includes("expired") || res.status === 403) {
+                throw new Error("API Key 已过期或失效，请前往 Google AI Studio 重新申请。");
+            }
+            throw new Error(data.error?.message || "Gemini API 异常");
+        }
+        return data;
+    } catch (e) {
+        throw e;
+    }
   };
 
   const triggerUpdate = async (isAuto = false) => {
-    if (isUpdating || !user || !GEMINI_API_KEY.startsWith("AIza")) return;
+    if (isUpdating || !user) return;
     setIsUpdating(true);
+    if (!isAuto) setErrorMsg(null);
+
     try {
       const result = await geminiFetch({
         contents: [{ parts: [{ text: `根据策略搜集最新情报：${strategy}` }] }],
@@ -116,6 +129,7 @@ const App = () => {
         tools: [{ "google_search": {} }],
         generationConfig: { responseMimeType: "application/json" }
       });
+      
       const text = result.candidates?.[0]?.content?.parts?.[0]?.text;
       const parsed = JSON.parse(text);
       if (parsed.items) {
@@ -130,7 +144,7 @@ const App = () => {
       }
     } catch (err) { 
       console.error(err);
-      setErrorMsg("抓取失败：" + err.message);
+      setErrorMsg("同步失败: " + err.message);
     } finally { 
       setIsUpdating(false); 
       if (!isAuto) setCountdown(10); 
@@ -184,6 +198,13 @@ const App = () => {
       </nav>
 
       <main className="pt-24 pb-12 px-6 max-w-4xl mx-auto">
+        {errorMsg && (
+            <div className="mb-6 p-4 bg-red-50 border border-red-100 rounded-2xl flex items-center gap-3 text-red-600 text-sm font-bold animate-pulse">
+                <AlertCircle size={18} />
+                {errorMsg}
+            </div>
+        )}
+
         {view === 'home' && (
           <div className="animate-in fade-in duration-700">
             <header className="mb-12 flex justify-between items-end">
@@ -196,7 +217,7 @@ const App = () => {
             
             <div className="relative space-y-10">
               <div className="absolute left-8 top-4 bottom-4 w-px bg-slate-200"></div>
-              {intelList.length === 0 && <div className="pl-20 py-20 text-slate-300 italic">正在等待 AI 探测情报...</div>}
+              {intelList.length === 0 && !isUpdating && <div className="pl-20 py-20 text-slate-300 italic">正在等待 AI 探测情报...</div>}
               {intelList.map((item) => (
                 <article key={item.id} className="relative pl-20 group">
                   <div className="absolute left-[31px] w-[3px] h-[16px] bg-slate-300 rounded-full top-2 group-hover:bg-indigo-600 group-hover:h-12 transition-all"></div>
@@ -228,7 +249,6 @@ const App = () => {
             <h2 className="text-2xl font-black mb-6">管理验证</h2>
             <input type="password" value={password} onChange={(e)=>setPassword(e.target.value)} placeholder="密码" className="w-full p-4 bg-slate-50 rounded-2xl mb-4 text-center text-xl font-bold" />
             <button onClick={handleAdminLogin} className="w-full p-4 bg-indigo-600 text-white rounded-2xl font-black">验证</button>
-            {errorMsg && <p className="mt-4 text-red-500 font-bold">{errorMsg}</p>}
           </div>
         )}
 
@@ -242,7 +262,6 @@ const App = () => {
                 {isUpdating ? '抓取中...' : '即刻抓取'}
               </button>
             </div>
-            {errorMsg && <p className="mt-4 text-indigo-600 font-bold">{errorMsg}</p>}
             <div className="mt-10 border-t pt-6">
               <h4 className="font-black mb-4 flex items-center gap-2"><History size={16}/> 审计日志</h4>
               <div className="space-y-2">
