@@ -14,13 +14,12 @@ import {
 
 /**
  * ==================================================
- * 🛰️ SUGAR RADAR V8.2.5 - 决策侦测增强版
+ * 🛰️ SUGAR RADAR V8.2.6 - 深度适配·换行加固版
  * ==================================================
  * [更新逻辑]：
- * 1. 抓取加固：handleUpdate 增加 res.ok 校验与详细错误反馈。
- * 2. 结构容错：Service.parseJson 适配 AI 返回的 3 种主流 JSON 变体。
- * 3. 时效死令：Prompt 强制锁定 24H 内联网搜索，确保最有失效性。
- * 4. 视觉防守：严禁改动 V8.2.0 的平行对齐布局、紧凑间距。
+ * 1. 文本换行修复：移除标题的 truncate 和内容的 line-clamp-2，确保手机端内容完整显示。
+ * 2. 样式锁定：严格保持 V8.2.5 的平行对齐布局、垂直时间导轨与紧凑间距。
+ * 3. 响应式加固：通过 break-words 确保长字符不会撑破手机容器。
  */
 
 const FIREBASE_CONFIG = {
@@ -46,7 +45,6 @@ const STRATEGY_TEMPLATES = {
 const INDUSTRIES = Object.keys(STRATEGY_TEMPLATES);
 
 const Service = {
-  // 核心解析器：V8.2.5 鲁棒版
   parseJson: (text) => {
     try {
       let cleanText = text.replace(/```json/g, '').replace(/```/g, '').trim();
@@ -62,7 +60,6 @@ const Service = {
       const jsonStr = cleanText.substring(start, end + 1);
       const parsed = JSON.parse(jsonStr);
       
-      // 智能装箱逻辑：确保输出永远是数组
       if (parsed.items && Array.isArray(parsed.items)) return parsed.items;
       if (Array.isArray(parsed)) return parsed;
       if (typeof parsed === 'object') return [parsed];
@@ -162,7 +159,7 @@ export default function App() {
             model: node.model,
             messages: [{ 
               role: "system", 
-              content: "你是一个资深商业情报分析师。必须联网实时搜索【过去24小时内】的动态，确保时效性证明。你必须对获取的信息进行深度原创总结，严禁直接搬运。返回纯 JSON 数组。字段：title(原创总结标题), content(100字原创摘要), urgency_level(时效证明：八百里加急/六百里加急/实时快报/常态监控), source_count(模拟交叉验证的节点数，8-15之间的整数), impact_summary(15-25字核心研判), grade_reason(10-15字理由), concern_level(1-5), companies(识别出的主体数组)" 
+              content: "你是一个资深商业情报分析师。必须联网实时搜索【过去24小时内】的动态，确保时效性证明。你必须对获取的信息进行深度原创总结，严禁直接搬运。返回纯 JSON 数组。字段：title(原创总结标题), content(80-120字原创摘要), urgency_level(时效证明：八百里加急/六百里加急/实时快报/常态监控), source_count(模拟交叉验证的节点数，8-15之间的整数), impact_summary(15-25字核心研判), grade_reason(10-15字理由), concern_level(1-5), companies(识别出的主体数组)" 
             }, { role: "user", content: strategy.prompt }],
             temperature: 0.1
           })
@@ -285,7 +282,8 @@ export default function App() {
                           </div>
                         </div>
                         
-                        <h3 className="text-lg md:text-xl font-black leading-tight text-slate-900 mb-2 group-hover:text-blue-600 transition-colors tracking-tight min-w-0 truncate">{Service.normalize(item.title)}</h3>
+                        {/* 换行修复：移除 truncate，添加 break-words */}
+                        <h3 className="text-lg md:text-xl font-black leading-tight text-slate-900 mb-2 group-hover:text-blue-600 transition-colors tracking-tight min-w-0 break-words whitespace-normal">{Service.normalize(item.title)}</h3>
 
                         {item.companies && (
                           <div className="flex flex-wrap gap-1 mb-3 items-center">
@@ -295,9 +293,9 @@ export default function App() {
                           </div>
                         )}
 
-                        <p className="text-slate-500 mb-5 text-[13px] leading-relaxed font-medium line-clamp-2">{Service.normalize(item.content)}</p>
+                        {/* 换行修复：移除 line-clamp-2 */}
+                        <p className="text-slate-500 mb-5 text-[13px] leading-relaxed font-medium break-words">{Service.normalize(item.content)}</p>
                         
-                        {/* 完美平行对齐布局 */}
                         <div className="pt-4 border-t border-slate-50 flex flex-col md:flex-row justify-between items-start md:items-center gap-4">
                           <div className="flex-1 flex items-center gap-3 min-w-0">
                             <span className="text-[8px] uppercase font-black text-indigo-600 tracking-widest leading-none shrink-0 whitespace-nowrap">关键影响</span>
@@ -378,10 +376,10 @@ export default function App() {
                         <button 
                           onClick={handleUpdate} 
                           disabled={isUpdating || cooldown > 0} 
-                          className={`w-full h-14 rounded-2xl font-black text-sm transition-all flex items-center justify-center gap-3 shadow-xl ${cooldown > 0 ? 'bg-slate-50 text-slate-300 border-none shadow-none cursor-not-allowed' : 'bg-slate-900 text-white hover:bg-black active:scale-[0.98]'}`}
+                          className={`w-full h-14 rounded-2xl font-black text-sm transition-all flex items-center justify-center gap-3 shadow-xl ${cooldown > 0 ? 'bg-slate-100 text-slate-400 border-none shadow-none cursor-not-allowed' : 'bg-slate-900 text-white hover:bg-black active:scale-[0.98]'}`}
                         >
                           {isUpdating ? <RefreshCw className="animate-spin" size={16}/> : <Zap size={16}/>}
-                          {cooldown > 0 ? `冷却锁定 (${cooldown}s)` : '立即下达全网原创总结指令'}
+                          {cooldown > 0 ? `冷却锁定 (${cooldown}s)` : '立即下达全网探测指令'}
                         </button>
                         <p className="text-[9px] text-slate-400 text-center mt-3 uppercase tracking-widest italic font-bold">Real-time 24H sourcing & Original summary closure</p>
                       </div>
